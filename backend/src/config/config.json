@@ -1,0 +1,23 @@
+{
+  "development": {
+    "username": "postgres",
+    "password": "admin",
+    "database": "mirecleme",
+    "host": "localhost",
+    "dialect": "postgres"
+  },
+  "test": {
+    "username": "postgres",
+    "password": "admin",
+    "database": "miracleme",
+    "host": "127.0.0.1",
+    "dialect": "postgres"
+  },
+  "production": {
+    "username": "miracleme_user",
+    "password": "Miracleme@2025",
+    "database": "miracleme",
+    "host": "127.0.0.1",
+    "dialect": "postgres"
+  }
+}

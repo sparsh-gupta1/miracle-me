@@ -1,0 +1,97 @@
+#!/bin/bash
+
+set -e  # Exit on error
+
+echo "🚀 Starting deployment for miracle-me-backend"
+
+# Navigate to project directory
+cd /home/ubuntu/apps/miracle-me-backend || {
+  echo "❌ Project directory not found"
+  exit 1
+}
+
+# Backup current version
+echo "📦 Creating backup..."
+BACKUP_DIR="/home/ubuntu/backups/miracle-me-backend-$(date +%Y%m%d_%H%M%S)"
+mkdir -p /home/ubuntu/backups
+cp -r /home/ubuntu/apps/miracle-me-backend "$BACKUP_DIR" || echo "⚠️ Backup failed, continuing..."
+
+# Pull latest code
+echo "📥 Pulling latest code from main branch..."
+git fetch origin main
+git reset --hard origin/main
+
+# Install dependencies
+echo "📦 Installing dependencies..."
+npm ci --production --prefer-offline
+
+# Verify environment variables
+echo "🔍 Checking environment configuration..."
+if [ ! -f .env ]; then
+  echo "❌ .env file not found! Please create it on the server."
+  exit 1
+fi
+
+# Check if required environment variables are set
+source .env
+REQUIRED_VARS=("PORT" "DB_HOST" "DB_NAME" "DB_USER" "JWT_SECRET" "AWS_ACCESS_KEY_ID" "AWS_S3_BUCKET")
+for var in "${REQUIRED_VARS[@]}"; do
+  if [ -z "${!var}" ]; then
+    echo "⚠️ Warning: $var is not set in .env"
+  fi
+done
+
+# Restart application with PM2
+echo "🔄 Restarting application..."
+pm2 startOrReload ecosystem.config.js --update-env
+
+# Save PM2 configuration
+pm2 save
+
+# Wait for application to start
+echo "⏳ Waiting for application to start..."
+sleep 5
+
+# Health check
+echo "🏥 Performing health check..."
+MAX_RETRIES=10
+RETRY_COUNT=0
+
+while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+  if curl -f http://localhost:${PORT:-3000}/health > /dev/null 2>&1; then
+    echo "✅ Health check passed!"
+    break
+  else
+    RETRY_COUNT=$((RETRY_COUNT + 1))
+    echo "⏳ Health check attempt $RETRY_COUNT/$MAX_RETRIES..."
+    sleep 3
+  fi
+done
+
+if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+  echo "❌ Health check failed after $MAX_RETRIES attempts"
+  echo "📋 PM2 logs:"
+  pm2 logs miracle-me-backend --lines 50 --nostream
+  
+  echo "🔄 Rolling back to previous version..."
+  pm2 stop miracle-me-backend
+  rm -rf /home/ubuntu/apps/miracle-me-backend
+  cp -r "$BACKUP_DIR" /home/ubuntu/apps/miracle-me-backend
+  cd /home/ubuntu/apps/miracle-me-backend
+  pm2 start ecosystem.config.js
+  
+  exit 1
+fi
+
+# Display application status
+echo "📊 Application status:"
+pm2 status miracle-me-backend
+
+# Cleanup old backups (keep last 5)
+echo "🧹 Cleaning up old backups..."
+cd /home/ubuntu/backups
+ls -t | tail -n +6 | xargs -r rm -rf
+
+echo "🎉 Deployment completed successfully!"
+echo "📝 Deployment time: $(date)"
+

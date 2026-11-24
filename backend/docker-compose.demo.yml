@@ -1,0 +1,74 @@
+# Demo stack: API + Postgres + Redis + expert simulators. Only the API port is published.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: miracle
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: miracle
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U miracle -d miracle"]
+      interval: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      retries: 20
+
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    ports: ["${HOST_PORT:-4000}:4000"]
+    environment:
+      PORT: 4000
+      NODE_ENV: development
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: miracle
+      DB_USER: miracle
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_SYNC: "false"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      JWT_EXPIRES_IN: 30d
+      JWT_REFRESH_EXPIRES_IN: 365d
+      BANK_ENCRYPTION_KEY: ${BANK_ENCRYPTION_KEY}
+      LOG_LEVEL: info
+      ENABLE_SMS: "false"
+      DEMO_MODE: "true"
+      DEMO_OTP: ${DEMO_OTP:-1234}
+    # Migrations (not DB_SYNC) and the idempotent seed run on every start.
+    command: >
+      sh -c "npx sequelize-cli db:migrate --url postgres://miracle:$${DB_PASSWORD}@db:5432/miracle
+      && node scripts/seed-demo.js && node src/server.js"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4000/health"]
+      interval: 10s
+      retries: 12
+      start_period: 40s
+
+  # Keeps four experts "reachable" so a customer's request is accepted after ~4 s.
+  # Without a connected expert the server answers "Receiver is offline".
+  experts:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      api: { condition: service_healthy }
+    environment:
+      DEMO_OTP: ${DEMO_OTP:-1234}
+    command: >
+      sh -c "for m in 9000000001 9000000002 9000000003 9000000006; do
+      (while true; do node scripts/demo-expert.js $$m --delay=4 --url=http://api:4000; sleep 5; done) & done; wait"
+volumes:
+  pgdata:
